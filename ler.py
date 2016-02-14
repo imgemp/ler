@@ -1,4 +1,7 @@
+import numpy as np
 from numpy import exp, median
+from scipy.sparse import csr_matrix
+from scipy.sparse import bmat
 from scipy.sparse.csgraph import laplacian
 from sklearn.manifold.locally_linear import (
     null_space, LocallyLinearEmbedding)
@@ -8,7 +11,7 @@ from sklearn.neighbors import kneighbors_graph, NearestNeighbors
 
 def ler(X, Y, n_components=2, affinity='nearest_neighbors',
         n_neighbors=None, gamma=None, mu=1.0, y_gamma=None,
-        eigen_solver='auto', tol=1e-6, max_iter=100, 
+        eigen_solver='auto', tol=1e-6, max_iter=100,
         random_state=None):
     """
     Laplacian Eigenmaps for Regression (LER)
@@ -20,6 +23,7 @@ def ler(X, Y, n_components=2, affinity='nearest_neighbors',
 
     Y : ndarray, 1 or 2-dimensional
         The response matrix, shape (num_points, num_responses).
+        Y[0:] is assumed to provide responses for X[:num_response_points]
 
     n_components : int
         Number of dimensions for embedding. Default is 2.
@@ -61,18 +65,19 @@ def ler(X, Y, n_components=2, affinity='nearest_neighbors',
     if n_components > d_in:
         raise ValueError("output dimension must be less than or equal "
                          "to input dimension")
-    if Nx != Ny:
-        raise ValueError("X and Y must have same number of points")
+    if Nx < Ny:
+        raise ValueError("X should have at least as many points as Y")
     if affinity == 'nearest_neighbors':
         if n_neighbors >= Nx:
             raise ValueError("n_neighbors must be less than number of points")
-        if n_neighbors == None or n_neighbors <= 0:
+        if n_neighbors is None or n_neighbors <= 0:
             raise ValueError("n_neighbors must be positive")
     elif affinity == 'rbf':
-        if gamma != None and gamma <= 0:
+        if gamma is not None and gamma <= 0:
             raise ValueError("n_neighbors must be positive")
     else:
-        raise ValueError("affinity must be 'nearest_neighbors' or 'rbf' must be positive")
+        raise ValueError("affinity must be 'nearest_neighbors' or 'rbf' must" +
+                         " be positive")
 
     if Y.ndim == 1:
         Y = Y[:, None]
@@ -84,15 +89,21 @@ def ler(X, Y, n_components=2, affinity='nearest_neighbors',
     if affinity == 'nearest_neighbors':
         affinity = kneighbors_graph(X, n_neighbors, include_self=True)
     else:
-        if gamma == None:
+        if gamma is None:
             dists = pairwise_distances(X)
             gamma = 1.0 / median(dists)
-        affinity = kneighbors_graph(X, n_neighbors, mode='distance', include_self=True)
+        affinity = kneighbors_graph(X, n_neighbors, mode='distance',
+                                    include_self=True)
         affinity.data = exp(-gamma * affinity.data ** 2)
 
     K = rbf_kernel(Y, gamma=y_gamma)
     lap = laplacian(affinity, normed=True)
     lapK = laplacian(K, normed=True)
+    if Nx > Ny:
+        # zeros = csr_matrix((Nx-Ny,Nx-Ny),dtype=lap.dtype)
+        # lapK = bmat([[lapK, None], [None, zeros]])
+        ones = csr_matrix(np.ones((Nx-Ny,Nx-Ny)),dtype=lap.dtype)
+        lapK = bmat([[lapK, None], [None, ones]])
     embedding, _ = null_space(lap + mu * lapK, n_components,
                               k_skip=1, eigen_solver=eigen_solver,
                               tol=tol, max_iter=max_iter,
@@ -105,8 +116,8 @@ class LER(LocallyLinearEmbedding):
     """Scikit-learn compatible class for LER."""
 
     def __init__(self, n_components=2, affinity='nearest_neighbors',
-                 n_neighbors=2, gamma=None, mu=1.0, y_gamma=None, 
-                 eigen_solver='auto', tol=1E-6, max_iter=100, 
+                 n_neighbors=2, gamma=None, mu=1.0, y_gamma=None,
+                 eigen_solver='auto', tol=1E-6, max_iter=100,
                  random_state=None, neighbors_algorithm='auto'):
 
         self.n_components = n_components
@@ -132,10 +143,10 @@ class LER(LocallyLinearEmbedding):
         self.nbrs_.fit(X)
 
         self.embedding_ = ler(
-            X, Y, n_components=self.n_components, 
+            X, Y, n_components=self.n_components,
             affinity=self.affinity, n_neighbors=self.n_neighbors,
             gamma=self.gamma, mu=self.mu, y_gamma=self.y_gamma,
-            eigen_solver=self.eigen_solver, tol=self.tol, 
+            eigen_solver=self.eigen_solver, tol=self.tol,
             max_iter=self.max_iter, random_state=self.random_state)
 
         return self
